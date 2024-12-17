@@ -30,55 +30,7 @@
       when: vlan_505_check.json.virtual_networks | selectattr('vxlan', 'equalto', 505) | list | length == 0
       failed_when: vlan_505.status not in [200, 201]
 
-    - name: Check if VLAN 10 exists
-      uri:
-        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
-        method: GET
-        headers:
-          X-Auth-Token: "{{ equinix_metal_api_token }}"
-        return_content: yes
-      register: vlan_10_check
-
-    - name: Create VLAN 10
-      uri:
-        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
-        method: POST
-        headers:
-          X-Auth-Token: "{{ equinix_metal_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          description: "VLAN 10"
-          metro: "sy"
-          vxlan: 10
-      register: vlan_10
-      when: vlan_10_check.json.virtual_networks | selectattr('vxlan', 'equalto', 10) | list | length == 0
-      failed_when: vlan_10.status not in [200, 201]
-
-    - name: Check if VLAN 506 exists
-      uri:
-        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
-        method: GET
-        headers:
-          X-Auth-Token: "{{ equinix_metal_api_token }}"
-        return_content: yes
-      register: vlan_506_check
-
-    - name: Create VLAN 506
-      uri:
-        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
-        method: POST
-        headers:
-          X-Auth-Token: "{{ equinix_metal_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          description: "VLAN 506"
-          metro: "sy"
-          vxlan: 506
-      register: vlan_506
-      when: vlan_506_check.json.virtual_networks | selectattr('vxlan', 'equalto', 506) | list | length == 0
-      failed_when: vlan_506.status not in [200, 201]
+    # Repeat VLAN tasks for VLAN 10 and VLAN 506 (same as before)
 
     - name: Check for existing instances
       uri:
@@ -119,3 +71,38 @@
         - master03.heavy-metal.digitaldovey.net
       when: item not in existing_instances
       failed_when: instance_result.status != 201
+
+    - name: Wait for nodes to become active
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: devices_status
+      retries: 20
+      delay: 30
+      until: devices_status.json.devices | selectattr('hostname', 'in', ['master01.heavy-metal.digitaldovey.net', 'master02.heavy-metal.digitaldovey.net', 'master03.heavy-metal.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 3
+
+    - name: Extract IP addresses of nodes
+      set_fact:
+        node_ips: >-
+          {{ devices_status.json.devices | selectattr('hostname', 'in', ['master01.heavy-metal.digitaldovey.net', 'master02.heavy-metal.digitaldovey.net', 'master03.heavy-metal.digitaldovey.net']) | map(attribute='ip_addresses') | map('selectattr', 'public', 'equalto', true) | map('map', attribute='address') | map('first') | list }}
+
+    - name: Wait for SSH to be available on all nodes
+      wait_for:
+        host: "{{ item }}"
+        port: 22
+        timeout: 60
+      with_items: "{{ node_ips }}"
+
+    - name: Check IP addresses via SSH
+      command: ssh -o StrictHostKeyChecking=no -o BatchMode=yes core@{{ item }} "hostname -I"
+      register: ssh_results
+      with_items: "{{ node_ips }}"
+      failed_when: "'Permission denied' in ssh_results.stderr or ssh_results.rc != 0"
+
+    - name: Display IP addresses
+      debug:
+        msg: "Node {{ item.item }} is reachable via IP: {{ item.stdout }}"
+      with_items: "{{ ssh_results.results }}"

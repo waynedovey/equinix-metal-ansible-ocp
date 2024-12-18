@@ -410,7 +410,7 @@
              | map('first')
              | list }}
 
-    # Retrieve each device details with ports included
+    # Retrieve each device's details with ports included
     - name: Fetch each device details with ports included
       uri:
         url: "https://api.equinix.com/metal/v1/devices/{{ item.id }}?include=ports"
@@ -422,15 +422,22 @@
       loop: "{{ devices_status.json.devices }}"
       loop_control:
         loop_var: item
-      when:
-        - item.hostname == "master01.heavy-metal.digitaldovey.net"
-        - item.hostname == "master02.heavy-metal.digitaldovey.net"
-        - item.hostname == "master03.heavy-metal.digitaldovey.net"
+      when: >
+        item.hostname in [
+          "master01.heavy-metal.digitaldovey.net",
+          "master02.heavy-metal.digitaldovey.net",
+          "master03.heavy-metal.digitaldovey.net"
+        ]
 
     # Combine all network_ports into one list
     - name: Combine all ports into one list
       set_fact:
-        all_ports: "{{ device_details_each.results | json_query('[].json.network_ports[]') }}"
+        all_ports: >-
+          {{
+            device_details_each.results
+            | map(attribute='json.network_ports', default=[])
+            | flatten
+          }}
 
     # Disbond eth1 (remove it from bond0)
     - name: Disbond eth1
@@ -445,7 +452,7 @@
           bulk_disable: false
         status_code: [200, 204, 422]
       loop: "{{ all_ports }}"
-      when: item.name == 'eth1'
+      when: item.name == "eth1"
 
     # Extract VLAN 10 ID (UUID)
     # If we created VLAN 10 just now, use vlan_10.

@@ -316,7 +316,20 @@
     # ----------------------
     # CREATE RHEL 9 BASTION INSTANCE
     # ----------------------
-    - name: Create bastion spot instance
+    - name: Check for existing instances
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: instance_check
+
+    - name: Filter existing instances
+      set_fact:
+        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'bastion.heavy-metal.digitaldovey.net') | map(attribute='hostname') | list }}"
+
+    - name: Create spot instances
       uri:
         url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
         method: POST
@@ -326,7 +339,7 @@
         body_format: json
         body: |
           {
-            "hostname": "bastion.heavy-metal.digitaldovey.net",
+            "hostname": "{{ item }}",
             "plan": "m3.small.x86",
             "metro": "sy",
             "operating_system": "rhel_9",
@@ -334,42 +347,68 @@
             "spot_instance": true,
             "spot_price_max": 0.11
           }
-      register: bastion_instance
-      failed_when: bastion_instance.status != 201
+      register: instance_result
+      loop:
+        - bastion.heavy-metal.digitaldovey.net
+      when: item not in existing_instances
+      failed_when: instance_result.status != 201
 
-    - name: Debug bastion node status
-      debug:
-        var: bastion_status.json
-
-    - name: Wait for bastion node to become active
+    - name: Wait for nodes to become active
       uri:
-        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices/{{ bastion_instance.json.id }}"
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
         method: GET
         headers:
           X-Auth-Token: "{{ equinix_metal_api_token }}"
         return_content: yes
-      register: bastion_status
+      register: devices_status
       retries: 20
       delay: 30
-      until: bastion_status.json.state is defined and bastion_status.json.state == 'active'
+      until: devices_status.json.devices | selectattr('hostname', 'in', ['bastion.heavy-metal.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 1
 
-    # ----------------------
-    # CONFIGURE BASTION NODE PORTS
-    # ----------------------
-    - name: Fetch bastion device details with ports included
+    - name: Extract IP addresses of nodes
+      set_fact:
+        bastion_ip: >-
+          {{ devices_status.json.devices
+            | selectattr('hostname', 'in', ['bastion.heavy-metal.digitaldovey.net'])
+            | map(attribute='ip_addresses')
+            | map('selectattr', 'public', 'equalto', true)
+            | map('map', attribute='address')
+            | map('first')
+            | list
+            | first }}
+
+    - name: Debug bastion IP
+      debug:
+        msg: "Bastion instance public IP: {{ bastion_ip }}"
+
+     # Retrieve each device details with ports included
+    - name: Fetch each device details with ports included
       uri:
-        url: "https://api.equinix.com/metal/v1/devices/{{ bastion_instance.json.id }}?include=ports"
+        url: "https://api.equinix.com/metal/v1/devices/{{ item.id }}?include=ports"
         method: GET
         headers:
           X-Auth-Token: "{{ equinix_metal_api_token }}"
         return_content: yes
-      register: bastion_device_details
+      register: device_details_each
+      loop: "{{ devices_status.json.devices }}"
+      loop_control:
+        loop_var: item
 
-    - name: Extract bastion ports
+    - name: Debug device details
+      debug:
+        var: device_details_each
+
+    # Combine all network_ports into one list
+    - name: Combine all ports into one list
       set_fact:
-        bastion_ports: "{{ bastion_device_details.json.ports }}"
+        all_ports: "{{ device_details_each.results | json_query('[].json.network_ports[]') }}"
 
-    - name: Disbond eth1 on bastion
+    - name: Debug all_ports
+      debug:
+        var: all_ports
+
+    # Disbond eth1 (remove it from bond0)
+    - name: Disbond eth1
       uri:
         url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/disbond"
         method: POST
@@ -379,11 +418,75 @@
         body_format: json
         body:
           bulk_disable: false
-        status_code: [200, 204]
-      loop: "{{ bastion_ports }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
       when: item.name == 'eth1'
 
-    - name: Attach bastion eth1 to VLAN 10
+    # Extract VLAN 10 ID (UUID)
+    # If we created VLAN 10 just now, use vlan_10.
+    # Otherwise, it exists and we use vlan_10_check.
+    - name: Extract VLAN 10 ID
+      set_fact:
+        vlan_10_id: >-
+          {{
+            (vlan_10.json.virtual_network.id
+            if vlan_10 is defined and vlan_10.json.virtual_network is defined
+            else
+              vlan_10_check.json.virtual_networks
+              | selectattr('vxlan','equalto',10)
+              | list
+              | first
+            ).id
+          }}
+
+    - name: Debug VLAN 10 ID
+      debug:
+        var: vlan_10_id
+
+    # Extract VLAN 505 ID (UUID)
+    # If we created VLAN 505 just now, use vlan_505.
+    # Otherwise, it exists and we use vlan_505_check.
+    - name: Extract VLAN 505 ID
+      set_fact:
+        vlan_505_id: >-
+          {{
+            (vlan_505.json.virtual_network.id
+            if vlan_505 is defined and vlan_505.json.virtual_network is defined
+            else
+              vlan_505_check.json.virtual_networks
+              | selectattr('vxlan','equalto',505)
+              | list
+              | first
+            ).id
+          }}
+
+    - name: Debug VLAN 505 ID
+      debug:
+        var: vlan_505_id
+
+    # Extract VLAN 506 ID (UUID)
+    # If we created VLAN 506 just now, use vlan_506.
+    # Otherwise, it exists and we use vlan_506_check.
+    - name: Extract VLAN 506 ID
+      set_fact:
+        vlan_506_id: >-
+          {{
+            (vlan_506.json.virtual_network.id
+            if vlan_506 is defined and vlan_506.json.virtual_network is defined
+            else
+              vlan_506_check.json.virtual_networks
+              | selectattr('vxlan','equalto',506)
+              | list
+              | first
+            ).id
+          }}
+
+    - name: Debug VLAN 506 ID
+      debug:
+        var: vlan_506_id 
+
+    # Attach eth1 to VLAN 10 using the VLAN 10 UUID
+    - name: Attach eth1 to VLAN 10
       uri:
         url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign"
         method: POST
@@ -393,19 +496,54 @@
         body_format: json
         body:
           vnid: "{{ vlan_10_id }}"
-        status_code: [200, 204]
-      loop: "{{ bastion_ports }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
       when: item.name == 'eth1'
 
-    # ----------------------
-    # CONFIGURE BASTION SERVER
-    # ----------------------
-    - name: Wait for SSH to become available on bastion
-      wait_for:
-        host: "{{ bastion_status.json.ip_addresses | selectattr('public', 'equalto', true) | map(attribute='address') | first }}"
-        port: 22
-        state: started
-        timeout: 300
+    # Attach eth1 to VLAN 505 using the VLAN 505 UUID
+    - name: Attach eth1 to VLAN 505
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_505_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1'
+
+    # Attach eth1 to VLAN 506 using the VLAN 506 UUID
+    - name: Attach eth1 to VLAN 506
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_506_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1'
+
+    # Set Native VLAN 10 eth1 
+    - name: Ensure VLAN 10 is Native
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/native-vlan"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_10_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1'
 
     - name: Configure eth1 on bastion
       ansible.builtin.shell: |
@@ -414,7 +552,7 @@
         nmcli connection modify vlan-enp1s0f1np1 ipv4.addresses 192.168.0.1/24
         nmcli connection modify vlan-enp1s0f1np1 ipv4.method manual
         nmcli connection up vlan-enp1s0f1np1
-      delegate_to: "{{ bastion_status.json.ip_addresses | selectattr('public', 'equalto', true) | map(attribute='address') | first }}"
+      delegate_to: "{{ bastion_ip }}"
       remote_user: root
 
     - name: Install and configure DHCP server on bastion
@@ -428,5 +566,6 @@
         }" > /etc/dhcp/dhcpd.conf
         systemctl enable dhcpd
         systemctl start dhcpd
-      delegate_to: "{{ bastion_status.json.ip_addresses | selectattr('public', 'equalto', true) | map(attribute='address') | first }}"
+      delegate_to: "{{ bastion_ip }}"
       remote_user: root
+       

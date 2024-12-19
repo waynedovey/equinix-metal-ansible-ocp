@@ -337,6 +337,7 @@
 
         # Forward traffic from bond0 to bond0.10
         nft add rule ip nat PREROUTING iif "bond0" tcp dport 6443 dnat to 192.168.0.200:6443
+        nft add rule ip nat PREROUTING iif "bond0" tcp dport 22624 dnat to 192.168.0.200:22624
         nft add rule ip nat PREROUTING iif "bond0" tcp dport 80 dnat to 192.168.0.201:80
         nft add rule ip nat PREROUTING iif "bond0" tcp dport 443 dnat to 192.168.0.201:443
 
@@ -347,6 +348,28 @@
         nft list ruleset > /etc/sysconfig/nftables.conf
         systemctl enable nftables
         systemctl restart nftables
+      delegate_to: "{{ bastion_ip }}"
+      remote_user: root
+
+    - name: Install and Configure Squid Proxy
+      ansible.builtin.shell: |
+        # Install Squid Proxy
+        yum install -y squid
+
+        # Enable and start Squid service
+        systemctl enable squid
+        systemctl start squid
+
+        # Configure Squid Proxy to allow access only to the specific IP range
+        sed -i 's/^http_port .*/http_port 3128/' /etc/squid/squid.conf
+
+        # Add ACL rules for the allowed IP range
+        echo "acl allowed_ips src 192.168.0.1/24" >> /etc/squid/squid.conf
+        echo "http_access allow allowed_ips" >> /etc/squid/squid.conf
+        echo "http_access deny all" >> /etc/squid/squid.conf
+
+        # Reload Squid configuration
+        systemctl reload squid
       delegate_to: "{{ bastion_ip }}"
       remote_user: root
 

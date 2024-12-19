@@ -1,0 +1,107 @@
+---
+- name: Cleanup Cloudflare DNS Records and Equinix Metal Resources
+  hosts: localhost
+  vars_files:
+    - vars/equinix_metal_vars.yml
+
+  tasks:
+    # ----------------------
+    # Cloudflare DNS Cleanup
+    # ----------------------
+    - name: Delete DNS record for api.heavy-metal
+      community.general.cloudflare_dns:
+        api_token: "{{ cloudflare_api_token }}"
+        zone: "{{ cloudflare_zone }}"
+        record: "api.heavy-metal"
+        type: A
+        state: absent
+
+    - name: Delete DNS record for *.apps.heavy-metal
+      community.general.cloudflare_dns:
+        api_token: "{{ cloudflare_api_token }}"
+        zone: "{{ cloudflare_zone }}"
+        record: "*.apps.heavy-metal"
+        type: A
+        state: absent
+
+    # ----------------------
+    # Equinix Metal Instance Cleanup
+    # ----------------------
+    - name: Fetch all devices in the project
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: instance_list
+
+    - name: Delete all instances in the project
+      uri:
+        url: "https://api.equinix.com/metal/v1/devices/{{ item.id }}"
+        method: DELETE
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        status_code: 204
+      loop: "{{ instance_list.json.devices }}"
+      loop_control:
+        loop_var: item
+
+    # ----------------------
+    # Equinix Metal VLAN Cleanup with Retries
+    # ----------------------
+    - name: Fetch all VLANs in the project
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: vlan_list
+
+    - name: Attempt to delete VLANs with retries
+      block:
+        - name: Delete VLAN
+          uri:
+            url: "https://api.equinix.com/metal/v1/virtual-networks/{{ item.id }}"
+            method: DELETE
+            headers:
+              X-Auth-Token: "{{ equinix_metal_api_token }}"
+            status_code: 204
+          register: delete_result
+          loop: "{{ vlan_list.json.virtual_networks }}"
+          loop_control:
+            loop_var: item
+          retries: 5
+          delay: 10
+          until: delete_result.status == 204
+      rescue:
+        - name: Detach all ports from VLANs (if still assigned)
+          uri:
+            url: "https://api.equinix.com/metal/v1/ports/{{ port_id }}/detach"
+            method: POST
+            headers:
+              X-Auth-Token: "{{ equinix_metal_api_token }}"
+            body_format: json
+            body: {}
+            status_code: [200, 204, 422]
+          loop: >-
+            {{
+              vlan_list.json.virtual_networks
+              | selectattr('id', 'equalto', item.id)
+              | map(attribute='metal_gateways')
+              | flatten
+              | map(attribute='id')
+            }}
+          loop_control:
+            loop_var: port_id
+        - name: Retry VLAN deletion after detaching ports
+          uri:
+            url: "https://api.equinix.com/metal/v1/virtual-networks/{{ item.id }}"
+            method: DELETE
+            headers:
+              X-Auth-Token: "{{ equinix_metal_api_token }}"
+            status_code: 204
+          loop: "{{ vlan_list.json.virtual_networks }}"
+          loop_control:
+            loop_var: item

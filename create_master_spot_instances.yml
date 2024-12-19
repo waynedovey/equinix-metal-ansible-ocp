@@ -204,10 +204,11 @@
             (vlan_10.json.virtual_network.id
             if vlan_10 is defined and vlan_10.json.virtual_network is defined
             else
-              vlan_10_check.json.virtual_networks
-              | selectattr('vxlan','equalto',10)
+              (vlan_10_check.json.virtual_networks
+              | selectattr('vxlan', 'equalto', 10)
               | list
               | first
+              | default(None))
             ).id
           }}
       retries: 5

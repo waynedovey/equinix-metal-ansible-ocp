@@ -14,3 +14,5 @@ ipxe_script_sno: "https://example.com/ipxe"
 metro_facility: "sy"  # Facility code for Sydney
 cloudflare_api_token: "xxxx"
 cloudflare_zone: "example.com"
+cluster_name: "cluster-name"
+cluster_domain: "example.com"

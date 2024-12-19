@@ -152,25 +152,27 @@
       debug:
         msg: "Bastion instance public IP: {{ bastion_ip }}"
 
-    - name: Ensure DNS record for api.metal
+    - name: Ensure DNS record for api.heavy-metal
       community.general.cloudflare_dns:
         api_token: "{{ cloudflare_api_token }}"
         zone: "{{ cloudflare_zone }}"
-        record: "api.metal"
+        record: "api.heavy-metal"
         type: A
         value: "{{ bastion_ip }}"
         ttl: 3600
         proxied: false  # Set to true if you want Cloudflare proxy enabled
+        state: present 
 
-    - name: Ensure DNS record for *.apps.metal
+    - name: Ensure DNS record for *.apps.heavy-metal
       community.general.cloudflare_dns:
         api_token: "{{ cloudflare_api_token }}"
         zone: "{{ cloudflare_zone }}"
-        record: "*.apps.metal"
+        record: "*.apps.heavy-metal"
         type: A
         value: "{{ bastion_ip }}"
         ttl: 3600
         proxied: false  # Set to true if you want Cloudflare proxy enabled
+        state: present 
 
     # Retrieve each device details with ports included
     - name: Fetch each device details with ports included

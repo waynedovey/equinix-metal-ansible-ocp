@@ -1,5 +1,5 @@
 equinix_metal_api_token: "xxxx"
-equinix_metal_project_id: "xxx"
+equinix_metal_project_id: "xxxx"
 vlan_ids_to_check: [10, 505, 506]
 vlan_assignments:
   - vlan: "10"
@@ -9,6 +9,8 @@ vlan_assignments:
   - vlan: "506"
     state: "assigned"
 ipxe_script_master: "https://example.com/ipxe"
-ipxe_script_worker: "https://example.com/ipx"
+ipxe_script_worker: "https://example.com/ipxe"
 ipxe_script_sno: "https://example.com/ipxe"
-sydney_facility: "sy"  # Facility code for Sydney
+metro_facility: "sy"  # Facility code for Sydney
+cloudflare_api_token: "xxxx"
+cloudflare_zone: "example.com"

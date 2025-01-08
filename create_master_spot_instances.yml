@@ -304,6 +304,14 @@
       delegate_to: "{{ bastion_ip }}"
       remote_user: root
 
+    - name: Configure bond0.505 with IP address 192.168.1.1
+      ansible.builtin.shell: |
+        nmcli connection add type vlan con-name bond0.505 dev bond0 id 505
+        nmcli connection modify bond0.505 ipv4.addresses 192.168.1.1/24 ipv4.method manual
+        nmcli connection up bond0.505
+      delegate_to: "{{ bastion_ip }}"
+      remote_user: root
+
     - name: Install and configure DHCP server on bastion
       ansible.builtin.shell: |
         yum install -y dhcp-server
@@ -312,6 +320,12 @@
           range 192.168.0.10 192.168.0.100;
           option broadcast-address 192.168.0.255;
         }" > /etc/dhcp/dhcpd.conf
+        echo "        
+        subnet 192.168.1.0 netmask 255.255.255.0 {
+          range 192.168.1.10 192.168.1.100;
+          option routers 192.168.1.1;
+          option broadcast-address 192.168.1.255;
+        }" >> /etc/dhcp/dhcpd.conf        
         systemctl enable dhcpd
         systemctl start dhcpd
       delegate_to: "{{ bastion_ip }}"
@@ -341,6 +355,9 @@
         nft add rule ip nat PREROUTING iif "bond0" tcp dport 80 dnat to 192.168.0.201:80
         nft add rule ip nat PREROUTING iif "bond0" tcp dport 443 dnat to 192.168.0.201:443
 
+        # Masquerade traffic from bond0.505 for proper routing
+        nft add rule ip nat POSTROUTING oif "bond0.505" masquerade
+
         # Masquerade traffic from bond0.10 for proper routing back
         nft add rule ip nat POSTROUTING oif "bond0.10" masquerade
 
@@ -365,6 +382,8 @@
 
         # Add ACL rules for the allowed IP range
         echo "acl allowed_ips src 192.168.0.1/24" >> /etc/squid/squid.conf
+        echo "acl allowed_ips src 192.168.1.1/24" >> /etc/squid/squid.conf
+
         echo "http_access allow allowed_ips" >> /etc/squid/squid.conf
         echo "http_access deny all" >> /etc/squid/squid.conf
 

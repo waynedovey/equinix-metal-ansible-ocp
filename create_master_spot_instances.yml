@@ -319,12 +319,14 @@
         subnet 192.168.0.0 netmask 255.255.255.0 {
           range 192.168.0.10 192.168.0.100;
           option broadcast-address 192.168.0.255;
+          option domain-name-servers 192.168.0.1;
         }" > /etc/dhcp/dhcpd.conf
         echo "        
         subnet 192.168.1.0 netmask 255.255.255.0 {
           range 192.168.1.10 192.168.1.100;
           option routers 192.168.1.1;
           option broadcast-address 192.168.1.255;
+          option domain-name-servers 192.168.1.1;
         }" >> /etc/dhcp/dhcpd.conf        
         systemctl enable dhcpd
         systemctl start dhcpd

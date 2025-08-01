@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vm-test-505
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vm-test-506

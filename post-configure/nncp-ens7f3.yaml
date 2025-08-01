@@ -1,0 +1,42 @@
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: vlan505-506-trunk
+spec:
+  desiredState:
+    interfaces:
+      - name: ens7f3
+        state: up
+        type: ethernet
+      - name: ens7f3.505
+        state: up
+        type: vlan
+        vlan:
+          base-iface: ens7f3
+          id: 505
+      - bridge:
+          options:
+            stp:
+              enabled: false
+          port:
+            - name: ens7f3.505
+        name: br505
+        state: up
+        type: linux-bridge
+      - name: ens7f3.506
+        state: up
+        type: vlan
+        vlan:
+          base-iface: ens7f3
+          id: 506
+      - bridge:
+          options:
+            stp:
+              enabled: false
+          port:
+            - name: ens7f3.506
+        name: br506
+        state: up
+        type: linux-bridge
+  nodeSelector:
+    node-role.kubernetes.io/worker: ""

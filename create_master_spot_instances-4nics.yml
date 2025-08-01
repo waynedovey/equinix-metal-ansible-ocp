@@ -98,7 +98,7 @@
 
     - name: Filter existing bastion instances
       set_fact:
-        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'bastion.heavy-metal.digitaldovey.net') | map(attribute='hostname') | list }}"
+        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'bastion.{{ cluster_name }}.digitaldovey.net') | map(attribute='hostname') | list }}"
 
     - name: Create bastion spot instance on Rocky Linux 9
       uri:
@@ -120,7 +120,7 @@
           }
       register: instance_result
       loop:
-        - bastion.heavy-metal.digitaldovey.net
+        - bastion.{{ cluster_name }}.digitaldovey.net
       when: item not in existing_instances
       failed_when: instance_result.status != 201
 
@@ -134,13 +134,13 @@
       register: devices_status
       retries: 20
       delay: 30
-      until: devices_status.json.devices | selectattr('hostname', 'in', ['bastion.heavy-metal.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 1
+      until: devices_status.json.devices | selectattr('hostname', 'in', ['bastion.{{ cluster_name }}.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 1
 
     - name: Extract bastion IP address
       set_fact:
         bastion_ip: >-
           {{ devices_status.json.devices
-            | selectattr('hostname', 'in', ['bastion.heavy-metal.digitaldovey.net'])
+            | selectattr('hostname', 'in', ['bastion.{{ cluster_name }}.digitaldovey.net'])
             | map(attribute='ip_addresses')
             | map('selectattr', 'public', 'equalto', true)
             | map('map', attribute='address')
@@ -185,7 +185,7 @@
       loop: "{{ devices_status.json.devices }}"
       loop_control:
         loop_var: item
-      when: item.hostname == "bastion.heavy-metal.digitaldovey.net"
+      when: item.hostname == "bastion.{{ cluster_name }}.digitaldovey.net"
 
     - name: Combine all network ports into one list
       set_fact:
@@ -386,7 +386,7 @@
 
     - name: Filter existing master instances
       set_fact:
-        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'master\\d+.heavy-metal.digitaldovey.net') | map(attribute='hostname') | list }}"
+        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'master\\d+.{{ cluster_name }}.digitaldovey.net') | map(attribute='hostname') | list }}"
 
     - name: Create spot instances for master nodes
       uri:
@@ -410,9 +410,9 @@
           }
       register: instance_result
       loop:
-        - master01.heavy-metal.digitaldovey.net
-        - master02.heavy-metal.digitaldovey.net
-        - master03.heavy-metal.digitaldovey.net
+        - master01.{{ cluster_name }}.digitaldovey.net
+        - master02.{{ cluster_name }}.digitaldovey.net
+        - master03.{{ cluster_name }}.digitaldovey.net
       when: item not in existing_instances
       failed_when: instance_result.status != 201
 
@@ -426,13 +426,13 @@
       register: devices_status
       retries: 20
       delay: 30
-      until: devices_status.json.devices | selectattr('hostname', 'in', ['master01.heavy-metal.digitaldovey.net', 'master02.heavy-metal.digitaldovey.net', 'master03.heavy-metal.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 3
+      until: devices_status.json.devices | selectattr('hostname', 'in', ['master01.{{ cluster_name }}.digitaldovey.net', 'master02.{{ cluster_name }}.digitaldovey.net', 'master03.{{ cluster_name }}.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 3
 
     - name: Extract IP addresses of master nodes
       set_fact:
         node_ips: >-
           {{ devices_status.json.devices
-             | selectattr('hostname', 'in', ['master01.heavy-metal.digitaldovey.net', 'master02.heavy-metal.digitaldovey.net', 'master03.heavy-metal.digitaldovey.net'])
+             | selectattr('hostname', 'in', ['master01.{{ cluster_name }}.digitaldovey.net', 'master02.{{ cluster_name }}.digitaldovey.net', 'master03.{{ cluster_name }}.digitaldovey.net'])
              | map(attribute='ip_addresses')
              | map('selectattr', 'public', 'equalto', true)
              | map('map', attribute='address')
@@ -452,9 +452,9 @@
         loop_var: item
       when: >
         item.hostname in [
-          "master01.heavy-metal.digitaldovey.net",
-          "master02.heavy-metal.digitaldovey.net",
-          "master03.heavy-metal.digitaldovey.net"
+          "master01.{{ cluster_name }}.digitaldovey.net",
+          "master02.{{ cluster_name }}.digitaldovey.net",
+          "master03.{{ cluster_name }}.digitaldovey.net"
         ]
 
     - name: Combine all network ports from master nodes into one list

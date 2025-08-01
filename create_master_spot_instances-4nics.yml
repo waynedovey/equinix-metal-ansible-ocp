@@ -175,7 +175,7 @@
         record: "api.{{ cluster_name }}"
         type: A
         value: "{{ bastion_ip }}"
-        ttl: 3600
+        ttl: 60
         proxied: false
         state: present
 
@@ -186,7 +186,7 @@
         record: "*.apps.{{ cluster_name }}"
         type: A
         value: "{{ bastion_ip }}"
-        ttl: 3600
+        ttl: 60
         proxied: false
         state: present
 

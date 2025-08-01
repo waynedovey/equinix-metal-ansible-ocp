@@ -1,0 +1,85 @@
+---
+- name: Create a 3-node OpenShift cluster using the Assisted Installer API
+  hosts: localhost
+  vars_files:
+    - vars/assisted_installer_vars.yml
+
+  tasks:
+    - name: Generate API token using offline token
+      command: >
+        curl -s -X POST "https://api.openshift.com/api/assisted-install/v2/token"
+        -H "Content-Type: application/json"
+        -d '{"offline_token": "{{ offline_token }}"}'
+      register: token_response
+
+    - name: Debug token response
+      debug:
+        msg: "{{ token_response.stdout }}"
+
+    - name: Set API_TOKEN fact
+      set_fact:
+        api_token: "{{ (token_response.stdout | from_json).get('access_token', '') }}"
+
+    - name: Create cluster configuration file
+      copy:
+        dest: ./cluster.json
+        content: |
+          {
+            "name": "{{ cluster_name }}",
+            "openshift_version": "{{ openshift_version }}",
+            "high_availability_mode": "Full",
+            "cpu_architecture": "x86_64",
+            "base_dns_domain": "{{ base_dns_domain }}",
+            "pull_secret": {{ pull_secret | to_json }},
+            "ssh_public_key": "{{ ssh_public_key }}",
+            "network_type": "OpenShiftSDN",
+            "service_network_cidr": "172.30.0.0/16",
+            "cluster_network_cidr": "10.128.0.0/14",
+            "cluster_network_host_prefix": 23
+          }
+
+    - name: Debug cluster configuration
+      debug:
+        var: cluster_config
+
+    - name: Check if cluster already exists
+      command: >
+        curl -s -X GET "https://api.openshift.com/api/assisted-install/v2/clusters"
+        -H "Authorization: Bearer {{ api_token }}"
+      register: existing_clusters_response
+
+    - name: Debug existing clusters response
+      debug:
+        msg: "{{ existing_clusters_response.stdout }}"
+
+    - name: Extract existing cluster ID if present
+      set_fact:
+        existing_cluster_id: "{{ (existing_clusters_response.stdout | from_json | json_query('[?name==`{{ cluster_name }}`].id') | first | default('')) }}"
+
+    - name: Register a new cluster if not exists
+      command: >
+        curl -s -X POST "https://api.openshift.com/api/assisted-install/v2/clusters"
+        -H "Content-Type: application/json"
+        -H "Authorization: Bearer {{ api_token }}"
+        -d @./cluster.json
+      when: existing_cluster_id == ""
+      register: cluster_registration_output
+
+    - name: Debug cluster registration response
+      debug:
+        msg: "{{ cluster_registration_output.stdout }}"
+
+    - name: Extract cluster ID from response
+      set_fact:
+        cluster_id: "{{ (cluster_registration_output.stdout | from_json).get('id', '') }}"
+      when: existing_cluster_id == ""
+
+    - name: Validate cluster ID
+      fail:
+        msg: "Failed to register cluster: cluster ID is null or invalid. Response: {{ cluster_registration_output.stdout }}"
+      when: cluster_id == "" and existing_cluster_id == ""
+
+    - name: Debug final cluster ID
+      debug:
+        msg: "Cluster ID: {{ cluster_id if cluster_id else existing_cluster_id }}"
+

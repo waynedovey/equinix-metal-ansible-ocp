@@ -1,0 +1,690 @@
+---
+- name: Create Spot Instances on Equinix Metal
+  hosts: localhost
+  vars_files:
+    - vars/acm_sno_lab_equinix_metal_vars.yml
+  tasks:
+    - name: Verify vars file contents
+      debug:
+        msg: |
+          Project ID: {{ equinix_metal_project_id }}
+          API Token: {{ equinix_metal_api_token | default('not set') }}
+          Metro: {{ metro_facility }}
+          SSH User: {{ ssh_user | default('root') }}
+          SSH Key: {{ ssh_private_key_file | default('~/.ssh/id_ed25519') }}
+      failed_when: equinix_metal_project_id is not defined or equinix_metal_api_token is not defined or metro_facility is not defined
+
+    - name: Check if VLAN 505 exists
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: vlan_505_check
+      ignore_errors: true
+
+    - name: Create VLAN 505
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          description: "VLAN 505"
+          metro: "{{ metro_facility }}"
+          vxlan: 505
+        status_code: [200, 201]
+      register: vlan_505
+      when: vlan_505_check.status == 200 and (vlan_505_check.json.virtual_networks | selectattr('vxlan', 'equalto', 505) | list | length == 0)
+      ignore_errors: true
+
+    - name: Check if VLAN 10 exists
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: vlan_10_check
+      ignore_errors: true
+
+    - name: Create VLAN 10
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          description: "VLAN 10"
+          metro: "{{ metro_facility }}"
+          vxlan: 10
+        status_code: [200, 201]
+      register: vlan_10
+      when: vlan_10_check.status == 200 and (vlan_10_check.json.virtual_networks | selectattr('vxlan', 'equalto', 10) | list | length == 0)
+      ignore_errors: true
+
+    - name: Check if VLAN 506 exists
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: vlan_506_check
+      ignore_errors: true
+
+    - name: Create VLAN 506
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          description: "VLAN 506"
+          metro: "{{ metro_facility }}"
+          vxlan: 506
+        status_code: [200, 201]
+      register: vlan_506
+      when: vlan_506_check.status == 200 and (vlan_506_check.json.virtual_networks | selectattr('vxlan', 'equalto', 506) | list | length == 0)
+      ignore_errors: true
+
+    - name: Extract VLAN 10 ID
+      set_fact:
+        vlan_10_id: "{{ (vlan_10.json.id if vlan_10 is defined and vlan_10.json.id is defined else vlan_10_check.json.virtual_networks | selectattr('vxlan', 'equalto', 10) | first | default({})).id }}"
+      retries: 5
+      delay: 10
+      until: vlan_10_id is defined
+      when: vlan_10_check.status == 200
+
+    - name: Extract VLAN 505 ID
+      set_fact:
+        vlan_505_id: "{{ (vlan_505.json.id if vlan_505 is defined and vlan_505.json.id is defined else vlan_505_check.json.virtual_networks | selectattr('vxlan', 'equalto', 505) | first | default({})).id }}"
+      when: vlan_505_check.status == 200
+
+    - name: Extract VLAN 506 ID
+      set_fact:
+        vlan_506_id: "{{ (vlan_506.json.id if vlan_506 is defined and vlan_506.json.id is defined else vlan_506_check.json.virtual_networks | selectattr('vxlan', 'equalto', 506) | first | default({})).id }}"
+      when: vlan_506_check.status == 200
+
+    - name: Debug VLAN creation
+      debug:
+        msg: "VLAN 505: {{ vlan_505_id | default('not created') }}, VLAN 10: {{ vlan_10_id | default('not created') }}, VLAN 506: {{ vlan_506_id | default('not created') }}"
+      when: vlan_505_check.status == 200
+
+    - name: Check for existing instances
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: instance_check
+      ignore_errors: true
+
+    - name: Filter existing instances
+      set_fact:
+        existing_instances: "{{ (instance_check.json.devices | default([])) | selectattr('hostname', 'match', 'acm-sno\\.lab\\.digitaldovey\\.net') | map(attribute='hostname') | list }}"
+        existing_instance_id: "{{ (instance_check.json.devices | default([])) | selectattr('hostname', 'equalto', 'acm-sno.lab.digitaldovey.net') | map(attribute='id') | first | default('a8abd393-d050-4eec-85ad-2aaf96462ec9') }}"
+
+    - name: Create spot instances
+      uri:
+        url: https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body: |
+          {
+            "hostname": "{{ item }}",
+            "plan": "m3.large.x86",
+            "metro": "{{ metro_facility }}",
+            "operating_system": "rocky_9",
+            "billing_cycle": "hourly",
+            "spot_instance": true,
+            "spot_price_max": 0.68
+          }
+      register: instance_result
+      with_items:
+        - acm-sno.lab.digitaldovey.net
+      when: item not in existing_instances
+      failed_when: instance_result.results[0].status is defined and instance_result.results[0].status != 201
+      ignore_errors: true
+
+    - name: Wait for instance to be active (new instance)
+      uri:
+        url: https://api.equinix.com/metal/v1/devices/{{ instance_result.results[0].json.id }}
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: instance_status
+      retries: 30
+      delay: 10
+      until: instance_status.json is defined and instance_status.json.state == "active"
+      when: instance_result.results[0].skipped is not defined or not instance_result.results[0].skipped
+      ignore_errors: true
+
+    - name: Check status of existing instance
+      uri:
+        url: https://api.equinix.com/metal/v1/devices/{{ existing_instance_id }}
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: instance_status
+      when: instance_result.results[0].skipped is defined and instance_result.results[0].skipped and existing_instance_id != ''
+      ignore_errors: true
+
+    - name: Debug instance status
+      debug:
+        msg: "Instance status response: {{ instance_status | to_json }}"
+      when: instance_status is defined
+
+    - name: Extract public IP of the instance
+      set_fact:
+        instance_ip: "{{ instance_status.json.ip_addresses | selectattr('address_family', 'equalto', 4) | selectattr('public', 'equalto', true) | map(attribute='address') | first | default('136.144.62.95') }}"
+      when: instance_status.json is defined and instance_status.json.state == "active"
+
+    - name: Debug instance IP
+      debug:
+        msg: "Extracted instance IP: {{ instance_ip }}"
+      when: instance_ip is defined
+
+    - name: Add instance to inventory
+      add_host:
+        name: "{{ instance_ip }}"
+        groups: new_instance
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_private_key_file | default('~/.ssh/id_ed25519') }}"
+      when: instance_ip is defined and instance_ip != ''
+
+    - name: Debug inventory
+      debug:
+        msg: "Inventory groups: {{ groups | to_json }}"
+      when: groups is defined
+
+    - name: Retrieve device details with ports
+      uri:
+        url: https://api.equinix.com/metal/v1/devices/{{ existing_instance_id if instance_result.results[0].skipped else instance_result.results[0].json.id }}?include=network_ports
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: device_details
+      retries: 5
+      delay: 10
+      until: device_details.status == 200 and device_details.json is defined and device_details.json.network_ports is defined
+      ignore_errors: true
+
+    - name: Combine all network ports into one list
+      set_fact:
+        all_ports: "{{ device_details.json.network_ports | default([]) }}"
+      when: device_details.json is defined and device_details.json.network_ports is defined
+
+    - name: Debug all ports
+      debug:
+        msg: "All ports: {{ all_ports | to_json }}"
+      when: all_ports is defined
+
+    - name: Disbond eth1 from bond0
+      uri:
+        url: https://api.equinix.com/metal/v1/ports/{{ item.id }}/disbond
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          bulk_disable: false
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1' and item.data.bonded == true
+      ignore_errors: true
+
+    - name: Wait for disbond operation to complete
+      uri:
+        url: https://api.equinix.com/metal/v1/devices/{{ existing_instance_id if instance_result.results[0].skipped else instance_result.results[0].json.id }}?include=network_ports
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+        status_code: [200]
+      register: post_disbond_status
+      retries: 30
+      delay: 10
+      until: post_disbond_status.json is defined and post_disbond_status.json.network_ports | selectattr('name', 'equalto', 'eth1') | first | json_query('data.bonded') == false
+      when: all_ports | selectattr('name', 'equalto', 'eth1') | first | json_query('data.bonded') == true
+      ignore_errors: true
+
+    - name: Convert eth1 to Layer 2 mode
+      uri:
+        url: https://api.equinix.com/metal/v1/ports/{{ item.id }}/convert/layer-2
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body: {}
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1' and item.network_type != 'layer2'
+      register: convert_layer2_result
+      ignore_errors: true
+
+    - name: Check eth1 network type
+      set_fact:
+        eth1_network_type: "{{ all_ports | selectattr('name', 'equalto', 'eth1') | first | json_query('network_type') | default('unknown') }}"
+      when: all_ports is defined and (all_ports | selectattr('name', 'equalto', 'eth1') | list | length > 0)
+
+    - name: Debug eth1 network type
+      debug:
+        msg: "eth1 network type: {{ eth1_network_type }}"
+      when: eth1_network_type is defined
+
+    - name: Attach eth1 to VLAN 505
+      uri:
+        url: https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_505_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1' and vlan_505_id is defined
+      ignore_errors: true
+
+    - name: Attach eth1 to VLAN 10
+      uri:
+        url: https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_10_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1' and vlan_10_id is defined
+      ignore_errors: true
+
+    - name: Attach eth1 to VLAN 506
+      uri:
+        url: https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_506_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1' and vlan_506_id is defined
+      ignore_errors: true
+
+    - name: Set VLAN 10 as native for eth1
+      uri:
+        url: https://api.equinix.com/metal/v1/ports/{{ item.id }}/native-vlan
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_10_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'eth1' and vlan_10_id is defined
+      ignore_errors: true
+
+    - name: Debug network ports
+      debug:
+        msg: "{{ post_disbond_status.json.network_ports | default('No network ports data') }}"
+      when: post_disbond_status.json is defined
+
+    - name: Display MAC addresses
+      debug:
+        msg: "MAC address for {{ item.name }} (acm-sno.lab.digitaldovey.net): {{ item.data.mac }}"
+      loop: "{{ post_disbond_status.json.network_ports | selectattr('data.mac', 'defined') | default([]) }}"
+      when: post_disbond_status.json is defined
+
+- name: Configure network and virtualization on the new instance
+  hosts: new_instance
+  become: yes
+  vars:
+    ansible_ssh_user: "{{ ssh_user | default('root') }}"
+    ansible_ssh_private_key_file: "{{ ssh_private_key_file | default('~/.ssh/id_ed25519') }}"
+    sushy_tools_image: "{{ lookup('env', 'SUSHY_TOOLS_IMAGE') | default('quay.io/metal3-io/sushy-tools', true) }}"
+  tasks:
+    - name: Verify SSH connectivity
+      command: whoami
+      register: ssh_check_result
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Debug SSH connectivity
+      debug:
+        msg: "SSH connectivity check: {{ ssh_check_result.stdout | default('Failed to connect via SSH') }}"
+      when: ansible_host is defined
+
+    - name: Gather network facts
+      setup:
+        gather_subset: network
+      when: ansible_host is defined
+
+    - name: Debug available interfaces
+      debug:
+        msg: "Available Ethernet interfaces: {{ ansible_facts['interfaces'] | reject('match', '^(lo|virbr.*|vlan.*)') | select('match', '^(en|eth).*') | sort | list }}"
+      when: ansible_host is defined
+
+    - name: Extract second ethernet interface
+      set_fact:
+        second_interface: "{{ ethernet_interfaces[1] | default('eth1') }}"
+      vars:
+        ethernet_interfaces: "{{ ansible_facts['interfaces'] | reject('match', '^(lo|virbr.*|vlan.*)') | select('match', '^(en|eth).*') | sort | list | default([]) }}"
+      when: ansible_host is defined and ethernet_interfaces | length >= 2
+      failed_when: ethernet_interfaces | length < 2
+
+    - name: Debug second interface
+      debug:
+        msg: "Second ethernet interface: {{ second_interface }}"
+      when: second_interface is defined
+
+    - name: Check if connection exists for second interface
+      command: nmcli connection show "System {{ second_interface }}"
+      register: nmcli_con_check
+      ignore_errors: true
+      when: ansible_host is defined and second_interface is defined
+
+    - name: Bring down second interface connection
+      command: nmcli connection down "System {{ second_interface }}"
+      register: nmcli_down_result
+      ignore_errors: true
+      when: ansible_host is defined and second_interface is defined and nmcli_con_check.rc == 0
+
+    - name: Delete second interface connection
+      command: nmcli connection delete "System {{ second_interface }}"
+      register: nmcli_delete_result
+      ignore_errors: true
+      when: ansible_host is defined and second_interface is defined and nmcli_con_check.rc == 0
+
+    - name: Add new connection for second interface VLAN 10 with static IP
+      command: nmcli connection add type vlan ifname {{ second_interface }}.10 dev {{ second_interface }} id 10 con-name "System {{ second_interface }}.10" ipv4.addresses 192.168.131.1/24 ipv4.method manual
+      register: nmcli_add_result
+      ignore_errors: true
+      when: ansible_host is defined and second_interface is defined
+
+    - name: Bring up second interface VLAN 10 connection
+      command: nmcli connection up "System {{ second_interface }}.10"
+      register: nmcli_up_result
+      ignore_errors: true
+      when: ansible_host is defined and second_interface is defined
+
+    - name: Display second interface VLAN 10 details
+      command: ip addr show {{ second_interface }}.10
+      register: ip_addr_result
+      ignore_errors: true
+      when: ansible_host is defined and second_interface is defined
+
+    - name: Output second interface VLAN 10 details
+      debug:
+        msg: "{{ ip_addr_result.stdout_lines | default('No output from ip addr show ' + second_interface + '.10') }}"
+      when: ansible_host is defined and second_interface is defined
+
+    - name: Install libvirt and related tools
+      dnf:
+        name:
+          - libvirt
+          - virt-install
+          - virt-manager
+          - xauth
+          - libguestfs
+          - wget
+          - vim
+        state: present
+      when: ansible_host is defined
+
+    - name: Enable and start libvirtd
+      systemd:
+        name: libvirtd
+        enabled: yes
+        state: started
+      when: ansible_host is defined
+
+    - name: Create default libvirt pool directory
+      file:
+        path: /var/lib/libvirt/images/default
+        state: directory
+        mode: '0755'
+        owner: qemu
+        group: qemu
+      when: ansible_host is defined
+
+    - name: Check existing libvirt pools
+      command: virsh pool-list
+      register: pool_list_result
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Define default libvirt pool
+      command: virsh pool-define-as --name default --type dir --target /var/lib/libvirt/images/default
+      register: pool_define_result
+      ignore_errors: true
+      when: ansible_host is defined and 'default' not in pool_list_result.stdout
+
+    - name: Enable autostart for default pool
+      command: virsh pool-autostart default
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Start default libvirt pool
+      command: virsh pool-start default
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Create QEMU network configuration
+      copy:
+        content: |
+          <network>
+            <name>sno</name>
+            <uuid>fc23191f-de21-4bf5-774b-98711b9f3d9e</uuid>
+            <forward mode='nat' size='1500'/>
+            <bridge name='virbr1' stp='on' delay='0'/>
+            <mac address='52:54:00:22:4d:3a'/>
+            <domain name='sno.lab.digitaldovey.net'/>
+            <ip family='ipv4' address='192.168.130.1' netmask='255.255.255.0'>
+              <dhcp>
+                <range start='192.168.130.20' end='192.168.130.254'/>
+                <host mac='52:54:00:22:4d:4a' name='acm' ip='192.168.130.10'/>
+                <host mac='52:54:00:22:4d:4b' name='master-0' ip='192.168.130.11'/>
+                <host mac='52:54:00:22:4d:4c' name='master-1' ip='192.168.130.12'/>
+                <host mac='52:54:00:22:4d:4d' name='master-2' ip='192.168.130.13'/>
+                <host mac='52:54:00:22:4d:4e' name='worker-0' ip='192.168.130.14'/>
+                <host mac='52:54:00:22:4d:4f' name='worker-1' ip='192.168.130.15'/>
+                <host mac='52:54:00:22:4d:5a' name='worker-2' ip='192.168.130.16'/>
+                <host mac='52:54:00:22:4d:5b' name='worker-3' ip='192.168.130.17'/>
+              </dhcp>
+            </ip>
+          </network>
+        dest: /etc/libvirt/qemu/networks/sno.xml
+        mode: '0644'
+      when: ansible_host is defined
+
+    - name: Define QEMU network
+      command: virsh net-define /etc/libvirt/qemu/networks/sno.xml
+      register: net_define_result
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Start QEMU network
+      command: virsh net-start sno
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Enable autostart for QEMU network
+      command: virsh net-autostart sno
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Enable dnsmasq in NetworkManager
+      copy:
+        content: |
+          [main]
+          dns=dnsmasq
+        dest: /etc/NetworkManager/conf.d/00-use-dnsmasq.conf
+        mode: '0644'
+      when: ansible_host is defined
+
+    - name: Create DNS hosts file
+      copy:
+        content: |
+          ##### SNO
+          192.168.130.10     api.acm.sno.lab.digitaldovey.net
+          192.168.130.10     api-int.acm.sno.lab.digitaldovey.net
+          192.168.130.10     oauth-openshift.apps.acm.sno.lab.digitaldovey.net
+          192.168.130.10     console-openshift-console.apps.acm.sno.lab.digitaldovey.net
+          192.168.130.10     canary-openshift-ingress-canary.apps.acm.sno.lab.digitaldovey.net
+          192.168.130.10     grafana-openshift-monitoring.apps.acm.sno.lab.digitaldovey.net
+          192.168.130.10     thanos-querier-openshift-monitoring.apps.acm.sno.lab.digitaldovey.net
+          192.168.130.10     assisted-image-service-multicluster-engine.apps.acm.sno.lab.digitaldovey.net
+          192.168.130.10     assisted-service-multicluster-engine.apps.acm.sno.lab.digitaldovey.net
+          ##### MCE
+          192.168.130.11     api-int.mce.sno.lab.digitaldovey.net
+          192.168.130.100    api.mce.sno.lab.digitaldovey.net
+          192.168.130.101    console-openshift-console.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    oauth-openshift.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    canary-openshift-ingress-canary.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    oauth-openshift.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    assisted-image-service-multicluster-engine.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    assisted-service-multicluster-engine.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    oauth-hosted-hcp-1.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    oauth-hosted-hcp-2.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    oauth-hosted-hcp-3.apps.mce.sno.lab.digitaldovey.net
+          192.168.130.101    oauth-hosted-hcp-4.apps.mce.sno.lab.digitaldovey.net
+          ##### HCP
+          192.168.130.14     console-openshift-console.apps.hcp-1.sno.lab.digitaldovey.net
+          192.168.130.14     canary-openshift-ingress-canary.apps.hcp-1.sno.lab.digitaldovey.net
+          192.168.130.17     console-openshift-console.apps.hcp-2.sno.lab.digitaldovey.net
+          192.168.130.17     canary-openshift-ingress-canary.apps.hcp-2.sno.lab.digitaldovey.net
+        dest: /etc/sno.lab.digitaldovey.net.dnsmasq.hosts
+        mode: '0644'
+      when: ansible_host is defined
+
+    - name: Configure dnsmasq for NetworkManager
+      copy:
+        content: |
+          # local dns
+          local=/sno.lab.digitaldovey.net/
+          addn-hosts=/etc/sno.lab.digitaldovey.net.dnsmasq.hosts
+          domain-needed
+          bogus-priv
+          # Automatically add <domain> to simple names in a hosts-file
+          expand-hosts
+          # Upstream public
+          no-poll
+          server=172.23.3.254
+          server=1.1.1.1
+        dest: /etc/NetworkManager/dnsmasq.d/01-DNS-digitaldovey.net.conf
+        mode: '0644'
+      when: ansible_host is defined
+
+    - name: Restart NetworkManager
+      systemd:
+        name: NetworkManager
+        state: restarted
+      when: ansible_host is defined
+
+    - name: Install podman and related tools
+      dnf:
+        name:
+          - podman
+          - net-tools
+          - bind-utils
+          - iptables-services
+          - dnsmasq
+        state: present
+      when: ansible_host is defined
+
+    - name: Enable and start iptables
+      systemd:
+        name: iptables
+        enabled: yes
+        state: started
+      when: ansible_host is defined
+
+    - name: Create sushy configuration directory
+      file:
+        path: /etc/sushy
+        state: directory
+        mode: '0755'
+      when: ansible_host is defined
+
+    - name: Configure sushy emulator
+      copy:
+        content: |
+          SUSHY_EMULATOR_LISTEN_IP = u'0.0.0.0'
+          SUSHY_EMULATOR_LISTEN_PORT = 8000
+          SUSHY_EMULATOR_SSL_CERT = None
+          SUSHY_EMULATOR_SSL_KEY = None
+          SUSHY_EMULATOR_OS_CLOUD = None
+          SUSHY_EMULATOR_LIBVIRT_URI = u'qemu:///system'
+          SUSHY_EMULATOR_IGNORE_BOOT_DEVICE = True
+          SUSHY_EMULATOR_BOOT_LOADER_MAP = {
+              u'UEFI': {
+                  u'x86_64': u'/usr/share/OVMF/OVMF_CODE.secboot.fd'
+              },
+              u'Legacy': {
+                  u'x86_64': None
+              }
+          }
+        dest: /etc/sushy/sushy-emulator.conf
+        mode: '0644'
+      when: ansible_host is defined
+
+    - name: Create and start sushy emulator container
+      command: 'podman create --net host --privileged --name sushy-emulator -v "/etc/sushy:/etc/sushy" -v "/var/run/libvirt:/var/run/libvirt" "{{ sushy_tools_image }}" sushy-emulator -i :: -p 8000 --config /etc/sushy/sushy-emulator.conf'
+      register: podman_create_result
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Start sushy emulator container
+      command: podman start sushy-emulator
+      register: podman_start_result
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Test sushy emulator
+      command: curl http://192.168.131.1:8000/redfish/v1/Managers
+      register: sushy_test_result
+      ignore_errors: true
+      when: ansible_host is defined
+
+    - name: Debug sushy test output
+      debug:
+        msg: "{{ sushy_test_result.stdout_lines | default('No output from sushy test') }}"
+      when: ansible_host is defined and sushy_test_result.stdout_lines is defined
+
+    - name: Install nmstate
+      dnf:
+        name: nmstate
+        state: present
+      when: ansible_host is defined

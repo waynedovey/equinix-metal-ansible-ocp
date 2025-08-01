@@ -1,0 +1,25 @@
+---
+- name: Display Equinix Metal Spot Prices for All Metro in YAML format
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - vars/equinix_metal_vars.yml
+  tasks:
+    - name: Retrieve spot prices for all instance types
+      uri:
+        url: "https://api.equinix.com/metal/v1/market/spot/prices"
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        method: GET
+        return_content: yes
+        status_code: 200
+        timeout: 60  # Increased timeout to 60 seconds (default is 30)
+      register: spot_prices_response
+      retries: 5   # Retry up to 5 times
+      delay: 10    # Wait 10 seconds between retries
+      until: spot_prices_response.status == 200  # Continue until success
+
+    - name: Display spot prices in YAML format
+      debug:
+        msg: "{{ spot_prices_response.json | to_nice_yaml }}"
+      when: spot_prices_response.status == 200

@@ -1,0 +1,32 @@
+---
+- name: Display Equinix Metal Spot Prices for Sydney Metro in YAML format
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - vars/equinix_metal_vars.yml
+  tasks:
+    - name: Retrieve spot prices for all instance types
+      uri:
+        url: "https://api.equinix.com/metal/v1/market/spot/prices"
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        method: GET
+        return_content: yes
+        status_code: 200
+      register: spot_prices_response
+
+    - name: Filter and format spot prices for Sydney Metro
+      set_fact:
+        sydney_spot_prices: >
+          {% set result = {} %}
+          {% for metro, prices in spot_prices_response.json.spot_market_prices.items() %}
+            {% if metro in ['sy4', 'sy5'] %}
+              {% set result = result.update({metro: prices}) or result %}
+            {% endif %}
+          {% endfor %}
+          {{ result }}
+
+    - name: Display spot prices for Sydney Metro in YAML format
+      debug:
+        var: sydney_spot_prices
+        verbosity: 0

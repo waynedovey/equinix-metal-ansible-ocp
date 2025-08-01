@@ -1,0 +1,259 @@
+---
+- name: Create 3 Spot Instances on Equinix Metal and configure Hybrid Unbonded network
+  hosts: localhost
+  vars_files:
+    - vars/equinix_metal_vars.yml
+
+  tasks:
+    # ----------------------
+    # INSTANCE CREATION
+    # ----------------------
+
+    - name: Check if VLAN 505 exists
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: vlan_505_check
+
+    - name: Check if VLAN 10 exists
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: vlan_10_check
+
+    - name: Check if VLAN 505 exists
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/virtual-networks"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: vlan_506_check
+
+
+    - name: Check for existing instances
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: instance_check
+
+    - name: Filter existing instances
+      set_fact:
+        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'worker\\d+.heavy-metal.digitaldovey.net') | map(attribute='hostname') | list }}"
+
+    - name: Create spot instances
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body: |
+          {
+            "hostname": "{{ item }}",
+            "plan": "n2.xlarge.x86",
+            "metro": "{{ metro_facility }}",
+            "operating_system": "custom_ipxe",
+            "billing_cycle": "hourly",
+            "spot_instance": true,
+            "spot_price_max": 1.00,
+            "ipxe_script_url": "{{ ipxe_script_worker }}"
+          }
+      register: instance_result
+      loop:
+        - worker01.heavy-metal.digitaldovey.net
+        - worker02.heavy-metal.digitaldovey.net
+        - worker03.heavy-metal.digitaldovey.net
+      when: item not in existing_instances
+      failed_when: instance_result.status != 201
+
+    - name: Wait for nodes to become active
+      uri:
+        url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: devices_status
+      retries: 20
+      delay: 30
+      until: devices_status.json.devices | selectattr('hostname', 'in', ['worker01.heavy-metal.digitaldovey.net', 'worker02.heavy-metal.digitaldovey.net', 'worker03.heavy-metal.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 3
+
+    - name: Extract IP addresses of nodes
+      set_fact:
+        node_ips: >-
+          {{ devices_status.json.devices
+             | selectattr('hostname', 'in', ['worker01.heavy-metal.digitaldovey.net', 'worker02.heavy-metal.digitaldovey.net', 'worker03.heavy-metal.digitaldovey.net'])
+             | map(attribute='ip_addresses')
+             | map('selectattr', 'public', 'equalto', true)
+             | map('map', attribute='address')
+             | map('first')
+             | list }}
+
+    # Retrieve each device's details with ports included
+    - name: Fetch each device details with ports included
+      uri:
+        url: "https://api.equinix.com/metal/v1/devices/{{ item.id }}?include=ports"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+        return_content: yes
+      register: device_details_each
+      loop: "{{ devices_status.json.devices }}"
+      loop_control:
+        loop_var: item
+      when: >
+        item.hostname in [
+          "worker01.heavy-metal.digitaldovey.net",
+          "worker02.heavy-metal.digitaldovey.net",
+          "worker03.heavy-metal.digitaldovey.net"
+        ]
+
+    # Combine all network_ports into one list
+    - name: Combine all ports into one list
+      set_fact:
+        all_ports: >-
+          {{
+            device_details_each.results
+            | map(attribute='json.network_ports', default=[])
+            | flatten
+          }}
+
+    # Disbond bond1 (remove it from bond0)
+    - name: Disbond bond1
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/disbond"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          bulk_disable: false
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == "bond1"
+
+    # Extract VLAN 10 ID (UUID)
+    # If we created VLAN 10 just now, use vlan_10.
+    # Otherwise, it exists and we use vlan_10_check.
+    - name: Extract VLAN 10 ID
+      set_fact:
+        vlan_10_id: >-
+          {{
+            (vlan_10.json.virtual_network.id
+            if vlan_10 is defined and vlan_10.json.virtual_network is defined
+            else
+              vlan_10_check.json.virtual_networks
+              | selectattr('vxlan','equalto',10)
+              | list
+              | first
+            ).id
+          }}
+      retries: 5
+      delay: 10
+      until: vlan_10_id is defined          
+
+    # Extract VLAN 505 ID (UUID)
+    # If we created VLAN 505 just now, use vlan_505.
+    # Otherwise, it exists and we use vlan_505_check.
+    - name: Extract VLAN 505 ID
+      set_fact:
+        vlan_505_id: >-
+          {{
+            (vlan_505.json.virtual_network.id
+            if vlan_505 is defined and vlan_505.json.virtual_network is defined
+            else
+              vlan_505_check.json.virtual_networks
+              | selectattr('vxlan','equalto',505)
+              | list
+              | first
+            ).id
+          }}
+
+    # Extract VLAN 506 ID (UUID)
+    # If we created VLAN 506 just now, use vlan_506.
+    # Otherwise, it exists and we use vlan_506_check.
+    - name: Extract VLAN 506 ID
+      set_fact:
+        vlan_506_id: >-
+          {{
+            (vlan_506.json.virtual_network.id
+            if vlan_506 is defined and vlan_506.json.virtual_network is defined
+            else
+              vlan_506_check.json.virtual_networks
+              | selectattr('vxlan','equalto',506)
+              | list
+              | first
+            ).id
+          }}
+
+    # Attach bond1 to VLAN 10 using the VLAN 10 UUID
+    - name: Attach bond1 to VLAN 10
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_10_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'bond1'
+
+    # Attach bond1 to VLAN 505 using the VLAN 505 UUID
+    - name: Attach bond1 to VLAN 505
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_505_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'bond1'
+
+    # Attach bond1 to VLAN 506 using the VLAN 506 UUID
+    - name: Attach bond1 to VLAN 506
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/assign"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_506_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'bond1'
+
+    # Set Native VLAN 10 bond1 
+    - name: Ensure VLAN 10 is Native
+      uri:
+        url: "https://api.equinix.com/metal/v1/ports/{{ item.id }}/native-vlan"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ equinix_metal_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          vnid: "{{ vlan_10_id }}"
+        status_code: [200, 204, 422]
+      loop: "{{ all_ports }}"
+      when: item.name == 'bond1'

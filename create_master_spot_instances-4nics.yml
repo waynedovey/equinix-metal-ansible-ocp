@@ -87,6 +87,7 @@
     # ----------------------
     # CREATE ROCKY LINUX 9 BASTION INSTANCE
     # ----------------------
+
     - name: Check for existing bastion instance
       uri:
         url: "https://api.equinix.com/metal/v1/projects/{{ equinix_metal_project_id }}/devices"
@@ -98,7 +99,13 @@
 
     - name: Filter existing bastion instances
       set_fact:
-        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'bastion.{{ cluster_name }}.digitaldovey.net') | map(attribute='hostname') | list }}"
+        existing_instances: >-
+          {{
+            instance_check.json.devices
+            | selectattr('hostname', 'equalto', 'bastion.' ~ cluster_name ~ '.digitaldovey.net')
+            | map(attribute='hostname')
+            | list
+          }}
 
     - name: Create bastion spot instance on Rocky Linux 9
       uri:
@@ -134,19 +141,28 @@
       register: devices_status
       retries: 20
       delay: 30
-      until: devices_status.json.devices | selectattr('hostname', 'in', ['bastion.{{ cluster_name }}.digitaldovey.net']) | selectattr('state', 'equalto', 'active') | list | length == 1
+      until: >-
+        {{
+          devices_status.json.devices
+          | selectattr('hostname', 'equalto', 'bastion.' ~ cluster_name ~ '.digitaldovey.net')
+          | selectattr('state', 'equalto', 'active')
+          | list
+          | length == 1
+        }}
 
     - name: Extract bastion IP address
       set_fact:
         bastion_ip: >-
-          {{ devices_status.json.devices
-            | selectattr('hostname', 'in', ['bastion.{{ cluster_name }}.digitaldovey.net'])
+          {{
+            devices_status.json.devices
+            | selectattr('hostname', 'equalto', 'bastion.' ~ cluster_name ~ '.digitaldovey.net')
             | map(attribute='ip_addresses')
             | map('selectattr', 'public', 'equalto', true)
             | map('map', attribute='address')
             | map('first')
             | list
-            | first }}
+            | first
+          }}
 
     - name: Debug bastion IP
       debug:

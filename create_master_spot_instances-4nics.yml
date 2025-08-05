@@ -402,7 +402,7 @@
 
     - name: Filter existing master instances
       set_fact:
-        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'match', 'master\\d+.{{ cluster_name }}.digitaldovey.net') | map(attribute='hostname') | list }}"
+        existing_instances: "{{ instance_check.json.devices | selectattr('hostname', 'search', 'master\\d+\\.' ~ cluster_name ~ '\\.digitaldovey\\.net') | map(attribute='hostname') | list }}"
 
     - name: Create spot instances for master nodes
       uri:

@@ -313,6 +313,14 @@
       delegate_to: "{{ bastion_ip }}"
       remote_user: root
 
+    - name: Configure bond0.506 with IP address 192.168.2.1
+      ansible.builtin.shell: |
+        nmcli connection add type vlan con-name bond0.506 dev bond0 id 506
+        nmcli connection modify bond0.506 ipv4.addresses 192.168.2.1/24 ipv4.method manual
+        nmcli connection up bond0.506
+      delegate_to: "{{ bastion_ip }}"
+      remote_user: root
+
     - name: Install and configure DHCP server on bastion (using dnf)
       ansible.builtin.shell: |
         dnf install -y dhcp-server
@@ -328,6 +336,13 @@
           option routers 192.168.1.1;
           option broadcast-address 192.168.1.255;
           option domain-name-servers 192.168.1.1;
+        }" >> /etc/dhcp/dhcpd.conf
+        echo "
+        subnet 192.168.2.0 netmask 255.255.255.0 {
+          range 192.168.2.10 192.168.2.99;
+          option routers 192.168.2.1;
+          option broadcast-address 192.168.2.255;
+          option domain-name-servers 192.168.2.1;
         }" >> /etc/dhcp/dhcpd.conf
         systemctl enable dhcpd
         systemctl start dhcpd
@@ -385,6 +400,44 @@
         echo "http_access allow allowed_ips" >> /etc/squid/squid.conf
         echo "http_access deny all" >> /etc/squid/squid.conf
         systemctl reload squid
+      delegate_to: "{{ bastion_ip }}"
+      remote_user: root
+
+    - name: Install dnsmasq on bastion
+      ansible.builtin.yum:
+        name: dnsmasq
+        state: present
+      delegate_to: "{{ bastion_ip }}"
+      remote_user: root
+
+    - name: Configure dnsmasq for DNS forwarding
+      ansible.builtin.copy:
+        dest: /etc/dnsmasq.conf
+        content: |
+          # Listen on all VLAN interfaces
+          interface=bond0.10
+          interface=bond0.505
+          interface=bond0.506
+
+          # Enable DNS forwarding
+          no-resolv
+          server=8.8.8.8
+          server=1.1.1.1
+
+          # Enable DNS logging (optional)
+          log-queries
+          log-facility=/var/log/dnsmasq.log
+
+          # Do not provide DHCP (already handled by dhcpd)
+          port=53
+      delegate_to: "{{ bastion_ip }}"
+      remote_user: root
+
+    - name: Enable and start dnsmasq
+      ansible.builtin.service:
+        name: dnsmasq
+        enabled: yes
+        state: restarted
       delegate_to: "{{ bastion_ip }}"
       remote_user: root
 

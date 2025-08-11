@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: no
   vars_files:
-    - vars/equinix_metal_vars.yml
+    - ../vars/equinix_metal_vars.yml
   tasks:
     - name: Retrieve spot prices for all instance types
       uri:
